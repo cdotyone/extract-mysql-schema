@@ -1,0 +1,23 @@
+{
+  "name": "extract-mysql-schema",
+  "version": "0.0.5",
+  "description": "",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cdotyone/extract-mysql-schema.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "test": "node ./run.js"
+  },
+  "keywords": [],
+  "author": "Chris Doty",
+  "license": "MIT",
+  "dependencies": {
+    "mysql2": "^3.6.3",
+    "sequelize": "^6.34.0"
+  }
+}
