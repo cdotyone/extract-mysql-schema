@@ -1,11 +1,12 @@
 const fs = require("fs");
+const path = require("path");
 const { extractSchemas } = require('./index.js');
 
 async function main(options) {
-  const config = require(options.configFile);
+  const config = require(path.join(process.cwd(),options.configFile));
   const result = await extractSchemas(config.connection);
   if(options.outputFile) {
-    fs.writeFileSync(options.outputFile, JSON.stringify(result,null,2) ,"utf8")
+    fs.writeFileSync(path.join(process.cwd(),options.outputFile), JSON.stringify(result,null,2) ,"utf8")
   } else console.log(JSON.stringify(result,null,2));
 }
 
