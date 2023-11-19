@@ -4,7 +4,7 @@ const { extractSchemas } = require('./index.js');
 
 async function main(options) {
   const config = require(path.join(process.cwd(),options.configFile));
-  const result = await extractSchemas(config.connection);
+  const result = await extractSchemas(config.connection,options);
   if(options.outputFile) {
     fs.writeFileSync(path.join(process.cwd(),options.outputFile), JSON.stringify(result,null,2) ,"utf8")
   } else console.log(JSON.stringify(result,null,2));
@@ -13,6 +13,8 @@ async function main(options) {
 let options = {
   configFile:"",
   outputFile:"",
+  columnISV:false,
+  tableISV:false
 }
 
 if (process.argv.length === 2) {
@@ -22,6 +24,9 @@ process.exit(1);
 let argv = process.argv;
 
 for(let i=2;i<argv.length;i++) {
+  if(argv[i]==="--columnISV") options.columnISV=true;
+  else if(argv[i]==="--tableISV") options.tableISV=true;
+  else
   if(argv[i].substring(0,2)==="--") {
       let name = argv[i].substring(2);
       if(options[name]!==undefined) {

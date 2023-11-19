@@ -15,15 +15,36 @@ const getAdapter = async function (connection) {
     return adapter;
 }
 
-const extractSchemas = async function (connection) {
+const lowerize = obj =>
+  Object.keys(obj).reduce((acc, k) => {
+    acc[k.toLowerCase()] = obj[k];
+    return acc;
+  }, {});
+
+const extractSchemas = async function (connection,options) {
     const schemaName = connection.database;
+    options = options || {columnISV:false,tableISV:true};
 
     let adapter = await getAdapter(connection);
+
+    let tableISV={};
+    if(options.tableISV) {
+        let queryTableISV = await adapter.query(`
+        SELECT *
+        FROM  INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = '${schemaName}'
+        `);
+        queryTableISV = queryTableISV[0];
+        for(let i=0;i<queryTableISV.length;i++){
+            tableISV[queryTableISV[i]["TABLE_NAME"]]=lowerize(queryTableISV[i]);
+        }
+    }
 
     let fkeys = await adapter.query(`
     SELECT iif.*, iifc.FOR_COL_NAME, iifc.REF_COL_NAME
     FROM INFORMATION_SCHEMA.INNODB_FOREIGN as iif
     JOIN INFORMATION_SCHEMA.INNODB_FOREIGN_COLS as iifc on iifc.ID=iif.ID
+    WHERE iif.ID like '${schemaName}/%'
     `);
     fkeys=fkeys[0];
 
@@ -31,6 +52,7 @@ const extractSchemas = async function (connection) {
     SELECT *
     FROM  INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '${schemaName}'
+    ORDER BY TABLE_NAME,ORDINAL_POSITION
     `);
     await adapter.close();
 
@@ -60,19 +82,19 @@ const extractSchemas = async function (connection) {
         if (schema[tableName]) table = schema[tableName];
         else {
             schema[tableName] = table;
-            tables.push({
+            let wrapper = {
                 name: tableName,
                 schemaName: schemaName,
                 kind: "table",
-                columns: table,
-                informationSchemaValue: {
-                    is_insertable_into: 'YES',
-                    table_type: 'BASE',
-                    table_catalog: schemaName,
-                    table_name: tableName,
-                    table_schema: schemaName
-                }
-            });
+                columns: table
+            };
+            if(options.tableISV) {
+                let isv = tableISV[tableName];
+                if(isv.table_type==='BASE TABLE') isv.table_type="BASE";
+                isv.is_insertable_into=isv.is_insertable_into||'YES';
+                wrapper.informationSchemaValue=isv;
+            }
+            tables.push(wrapper);
         }
 
         let column = {
@@ -89,6 +111,9 @@ const extractSchemas = async function (connection) {
             references:[]
         };
 
+        if(options.columnISV) {
+            column.informationSchemaValue = lowerize(columns[i]);
+        }
         if(foreign[tableName+"_"+name]!==undefined) {
             column.references.push(foreign[tableName+"_"+name]);
         }
