@@ -1,5 +1,6 @@
 "use strict";
 const SequelizeAdapter = require("sequelize");
+const orderBy = require("lodash.orderby");
 
 const getAdapter = async function (connection) {
     let adapter = new SequelizeAdapter(connection.database, connection.user, connection.password, {
@@ -15,36 +16,15 @@ const getAdapter = async function (connection) {
     return adapter;
 }
 
-const lowerize = obj =>
-  Object.keys(obj).reduce((acc, k) => {
-    acc[k.toLowerCase()] = obj[k];
-    return acc;
-  }, {});
-
-const extractSchemas = async function (connection,options) {
+const extractSchemas = async function (connection) {
     const schemaName = connection.database;
-    options = options || {columnISV:false,tableISV:true};
 
     let adapter = await getAdapter(connection);
-
-    let tableISV={};
-    if(options.tableISV) {
-        let queryTableISV = await adapter.query(`
-        SELECT *
-        FROM  INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = '${schemaName}'
-        `);
-        queryTableISV = queryTableISV[0];
-        for(let i=0;i<queryTableISV.length;i++){
-            tableISV[queryTableISV[i]["TABLE_NAME"]]=lowerize(queryTableISV[i]);
-        }
-    }
 
     let fkeys = await adapter.query(`
     SELECT iif.*, iifc.FOR_COL_NAME, iifc.REF_COL_NAME
     FROM INFORMATION_SCHEMA.INNODB_FOREIGN as iif
     JOIN INFORMATION_SCHEMA.INNODB_FOREIGN_COLS as iifc on iifc.ID=iif.ID
-    WHERE iif.ID like '${schemaName}/%'
     `);
     fkeys=fkeys[0];
 
@@ -52,7 +32,6 @@ const extractSchemas = async function (connection,options) {
     SELECT *
     FROM  INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '${schemaName}'
-    ORDER BY TABLE_NAME,ORDINAL_POSITION
     `);
     await adapter.close();
 
@@ -74,6 +53,7 @@ const extractSchemas = async function (connection,options) {
 
     let schema = {};
     let tables = [];
+    let hasParent = [];
     for (let i = 0; i < columns.length; i++) {
         let name = columns[i]['COLUMN_NAME'];
 
@@ -82,19 +62,19 @@ const extractSchemas = async function (connection,options) {
         if (schema[tableName]) table = schema[tableName];
         else {
             schema[tableName] = table;
-            let wrapper = {
+            tables.push({
                 name: tableName,
                 schemaName: schemaName,
                 kind: "table",
-                columns: table
-            };
-            if(options.tableISV) {
-                let isv = tableISV[tableName];
-                if(isv.table_type==='BASE TABLE') isv.table_type="BASE";
-                isv.is_insertable_into=isv.is_insertable_into||'YES';
-                wrapper.informationSchemaValue=isv;
-            }
-            tables.push(wrapper);
+                columns: table,
+                informationSchemaValue: {
+                    is_insertable_into: 'YES',
+                    table_type: 'BASE',
+                    table_catalog: schemaName,
+                    table_name: tableName,
+                    table_schema: schemaName
+                }
+            });
         }
 
         let column = {
@@ -111,21 +91,62 @@ const extractSchemas = async function (connection,options) {
             references:[]
         };
 
-        if(options.columnISV) {
-            column.informationSchemaValue = lowerize(columns[i]);
-        }
         if(foreign[tableName+"_"+name]!==undefined) {
             column.references.push(foreign[tableName+"_"+name]);
+            if(hasParent.indexOf(tableName)<0) {
+                hasParent.push(tableName);
+            }
         }
 
         column = Object.fromEntries(Object.entries(column).filter(([_, v]) => v != null));
         table.push(column);
     }
 
+    let noparent = [];
+    for (let i = 0; i < tables.length; i++) {
+        if(hasParent.indexOf(tables[i].name)<0) {
+            noparent.push(tables[i].name);
+        }
+    }
+    noparent.sort();
+
+    let byCounts = {};
+    for (let i = 0; i < hasParent.length; i++) {
+        let tableName = hasParent[i];
+        let table = schema[hasParent[i]];
+        for (let j = 0; j < table.length; j++) {
+            var column = table[j];
+            var references = column.references;
+            if(column.references.length==0) continue;
+
+            for (let k = 0; k < references.length; k++) {
+                var reference = references[k];
+                if(byCounts[reference.tableName]===undefined) byCounts[reference.tableName]={name:reference.tableName,count:0,children:[]};
+                byCounts[reference.tableName].count++;
+                byCounts[reference.tableName].children.push(tableName);
+            }
+        }
+    }
+    byCounts = orderBy(byCounts,['count']).reverse();
+    let tableOrder = noparent;
+    for(let i=0;i<byCounts.length;i++){
+        if(tableOrder.indexOf(byCounts[i].name)<0)
+            tableOrder.push(byCounts[i].name);
+
+        let children = byCounts[i].children;
+        for(let j=0;j<children.length;j++){
+            let child=children[j];
+            if(tableOrder.indexOf(child)<0 && byCounts.indexOf(child)<0) {
+                tableOrder.push(child);
+            }
+        }
+    }
+
     let result = {};
     result[schemaName] = {
         name: schemaName,
         tables: tables,
+        tableOrder,
         views: []
     }
     return result;
