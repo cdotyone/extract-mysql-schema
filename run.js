@@ -7,52 +7,74 @@ async function main(options) {
   const result = await extractSchemas(config.connection,options);
 
   if(options.writeSql){
-
+    const done = [];
     const content = [];
+    const processFolder = function(seedPath) {
+      if(fs.existsSync(seedPath)) {
+        fs.readdirSync(seedPath).forEach(file => {
+          file = path.join(seedPath,file);
+          if(done.indexOf(file)<0){
+            content.push(fs.readFileSync(file,"utf8"));
+          }
+        });
+      }
+    };
+
+    const tablesPath=path.join(process.cwd(),"tables");
     if(result[config.connection.database].tables.length>0) {
       // write table sql
-      const tablesPath=path.join(process.cwd(),"tables")
       if (!fs.existsSync(tablesPath)){
         fs.mkdirSync(tablesPath);
       }
       const byName = {};
       result[config.connection.database].tables.forEach(table => {
         byName[table.name] = table.definition;
-        if(options.verbose) console.log("writing",path.join(tablesPath,table.name+".sql"));
-        fs.writeFileSync(path.join(tablesPath,table.name+".sql"), table.definition ,"utf8")
+        let file = path.join(tablesPath,table.name+".sql");
+        done.push(file);
+        if(options.verbose) console.log("writing",file);
+        fs.writeFileSync(file, table.definition ,"utf8")
       });
 
       result[config.connection.database].tableOrder.forEach(table => {
         content.push(byName[table]);
       })
     }
+    processFolder(tablesPath);
 
+    const proceduresPath=path.join(process.cwd(),"procedures");
     if(result[config.connection.database].procedures.length>0) {
       // write routines
-      const proceduresPath=path.join(process.cwd(),"procedures")
       if (!fs.existsSync(proceduresPath)){
         fs.mkdirSync(proceduresPath);
       }
       result[config.connection.database].procedures.forEach(proc => {
-        if(options.verbose) console.log("writing",path.join(proceduresPath,proc.name+".sql"));
+        let file = path.join(proceduresPath,proc.name+".sql");
+        done.push(file);
+        if(options.verbose) console.log("writing",file);
         content.push(proc.definition);
-        fs.writeFileSync(path.join(proceduresPath,proc.name+".sql"), proc.definition ,"utf8")
+        fs.writeFileSync(file, proc.definition ,"utf8")
       });
     }
+    processFolder(proceduresPath);
+
+    const seedPath = path.join(process.cwd(),"seed");
+    if(fs.existsSync(seedPath)) {
+      result[config.connection.database].tableOrder.forEach(table => {
+        let seedfile = path.join(seedPath,table+'.sql');
+        if (fs.existsSync(seedfile)){
+          done.push(seedfile);
+          content.push(fs.readFileSync(seedfile,"utf8"));
+        }
+      });
+    }
+    processFolder(seedPath);
+
+    processFolder(path.join(process.cwd(),"override"));
 
     if(content.length>0) {
       fs.writeFileSync(path.join(process.cwd(),"init.sql"), content.join('\n\n') ,"utf8");
     }
   }
-
-  const seedList = [];
-  result[config.connection.database].tableOrder.forEach(table => {
-    let seedfile = path.join(process.cwd(),"seed",table+'.sql');
-    seedList.push(seedfile);
-    if (!fs.existsSync(seedfile)){
-      content.push(fs.readFileSync(seedfile,"utf8"));
-    }
-  })
 
   if(options.outputFile) {
     fs.writeFileSync(path.join(process.cwd(),options.outputFile), JSON.stringify(result,null,2) ,"utf8")
