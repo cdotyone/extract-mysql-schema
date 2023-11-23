@@ -68,25 +68,37 @@ const extractSchemas = async function (connection, options) {
     queryFkey=queryFkey[0];
 
     let queryIndexes = await adapter.query(`
-    select T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME as INDEX_NAME,F.NAME AS FIELD_NAME,F.POS,
-    CASE WHEN I.TYPE=2 OR I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_UNIQUE,
-    CASE WHEN I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_PRIMARY,
-    CASE WHEN I.TYPE=0 THEN 'YES' ELSE 'NO' END AS IS_FK
-    from INFORMATION_SCHEMA.INNODB_INDEXES I
+    select
+        T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME as INDEX_NAME,
+        C.COLUMN_TYPE as FIELD_TYPE,
+        F.POS,I.TYPE,I.*,
+        CASE WHEN I.TYPE=2 OR I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_UNIQUE,
+        CASE WHEN I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_PRIMARY,
+        CASE WHEN I.TYPE=0 THEN 'YES' ELSE 'NO' END AS IS_FK,
+        CASE WHEN C.EXTRA='auto_increment' THEN 'YES' ELSE 'NO' END AS IS_AUTONUMBER,
+        F2.INDEX_KEYS as FIELD_NAME
+    FROM INFORMATION_SCHEMA.INNODB_INDEXES I
     JOIN INFORMATION_SCHEMA.INNODB_FIELDS F on F.INDEX_ID=I.INDEX_ID
+    JOIN (
+        SELECT group_concat(FF.NAME) as INDEX_KEYS,FF.INDEX_ID
+        FROM INFORMATION_SCHEMA.INNODB_FIELDS as FF
+        GROUP BY FF.INDEX_ID
+    ) as F2 ON F2.INDEX_ID=F.INDEX_ID
     JOIN INFORMATION_SCHEMA.INNODB_TABLES T1 ON T1.TABLE_ID=I.TABLE_ID
     LEFT JOIN INFORMATION_SCHEMA.TABLES T2 ON T1.NAME=CONCAT(T2.TABLE_SCHEMA,'/',T2.TABLE_NAME)
-    WHERE T2.TABLE_SCHEMA = '${schemaName}'
+    JOIN information_schema.COLUMNS C on C.TABLE_SCHEMA=T2.TABLE_SCHEMA and C.TABLE_NAME=T2.TABLE_NAME and C.COLUMN_NAME=F.NAME
+    WHERE T2.TABLE_SCHEMA = 'litservices' and F.POS=0
     ORDER BY T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME,F.POS
     `);
     queryIndexes=queryIndexes[0];
 
     let queryColumns = await adapter.query(`
-    SELECT T.TABLE_TYPE,C.*
+    SELECT T.TABLE_TYPE,C.*,
+    CASE WHEN EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS C2 WHERE C2.TABLE_SCHEMA=C.TABLE_SCHEMA and C2.TABLE_NAME=C.TABLE_NAME AND C2.COLUMN_KEY='PRI' AND C.COLUMN_KEY='PRI' AND C2.COLUMN_NAME<>C.COLUMN_NAME) THEN 'YES' ELSE 'NO' END AS IS_COMPOUND_KEY
     FROM INFORMATION_SCHEMA.COLUMNS C
     LEFT JOIN INFORMATION_SCHEMA.TABLES T ON T.TABLE_SCHEMA=C.TABLE_SCHEMA AND T.TABLE_NAME=C.TABLE_NAME
     where C.TABLE_SCHEMA ='${schemaName}'
-    ORDER BY C.TABLE_NAME,C.ORDINAL_POSITION
+    order by C.TABLE_NAME,C.ORDINAL_POSITION
     `);
     queryColumns = queryColumns[0];
 
@@ -166,6 +178,7 @@ const extractSchemas = async function (connection, options) {
             sqltype: queryColumns[i]['COLUMN_TYPE'],
             maxLength: queryColumns[i]['CHARACTER_MAXIMUM_LENGTH'],
             isPrimaryKey: queryColumns[i]['COLUMN_KEY'] === 'PRI',
+            isCompoundKey: queryColumns[i]['IS_COMPOUND_KEY'] === 'YES',
             isNullable: queryColumns[i]['IS_NULLABLE'] === 'YES',
             isAutoNumber: queryColumns[i]['EXTRA'] === 'auto_increment',
             generated: queryColumns[i]['EXTRA'].indexOf('DEFAULT_GENERATED') >= 0 ? (queryColumns[i]['EXTRA'].indexOf('on update') > 0 ? "ALWAYS" : "BY DEFAULT") : "NEVER",
@@ -179,10 +192,13 @@ const extractSchemas = async function (connection, options) {
         let def = column.defaultValue?(column.defaultValue):"";
         if(def!=="CURRENT_TIMESTAMP" && def) {
             if(def.indexOf('(')>0) def=`(${def})`;
-            else if(column.type.indexOf('char')>=0 || column.type.indexOf('text')>=0) def=`'${def}'`;
+            else if(column.type.indexOf('char')>=0 || column.type.indexOf('text')>=0) {
+                if(def.indexOf("'")>=0) def='('+def.replace(/\\'/g,"'")+')';
+                else def=`('${def}')`;
+            }
         }
         if(def) def=`DEFAULT ${def}`;
-        definition.push(`${name}\t${column.sqltype}\t${column.isAutoNumber?" auto_increment":""}${def}\t${column.isNullable?"NULL":"NOT NULL"}${column.isPrimaryKey?" PRIMARY KEY":""}${extra}`);
+        definition.push(`${name}\t${column.sqltype}\t${column.isAutoNumber && column.isPrimaryKey ?" auto_increment":""}${def}\t${column.isNullable?"NULL":"NOT NULL"}${column.isPrimaryKey && !column.isCompoundKey?" PRIMARY KEY":""}${extra}`);
 
         if(foreign[tableName+"_"+name]!==undefined) {
             column.references.push(foreign[tableName+"_"+name]);
@@ -208,75 +224,62 @@ const extractSchemas = async function (connection, options) {
             let isConstraint = idx['IS_UNIQUE']==='YES' || idx['IS_PRIMARY']==='YES' || idx['IS_FK']==='YES';
 
             if(isConstraint) {
-                if(idx['IS_PRIMARY']==='YES') return;
-                else if(idx['IS_UNIQUE']==='YES') {
+                if(idx['IS_PRIMARY']==='YES') {
+                    if(idx['FIELD_NAME'].indexOf(',')>0) {
+                        definitions.push(`
+alter table ${idx['TABLE_NAME']}
+    add primary key (${idx['FIELD_NAME']});
+`)
+                    }
+                } else if(idx['IS_UNIQUE']==='YES') {
                     definitions.push(`
 alter table ${idx['TABLE_NAME']}
     add constraint ${idx['INDEX_NAME']}
-        unique (${idx['FIELD_NAME']});
+    unique (${idx['FIELD_NAME']});
 `)
-                } else {
-                    let ref = foreign[name+"_"+idx['FIELD_NAME']];
-                    //console.log("HERE",name+"_"+idx['FIELD_NAME'],ref);
-                    if(ref===undefined) return;
-
-                    definitions.push(`
+                    if(idx['IS_AUTONUMBER']==='YES') {
+                        definitions.push(`
 alter table ${idx['TABLE_NAME']}
-    add constraint ${idx['INDEX_NAME']}
-        foreign key (${idx['FIELD_NAME']}) references ${ref['tableName']} (${ref['columnName']});
-`)
+    modify ${idx['FIELD_NAME']} ${idx['FIELD_TYPE']} auto_increment;`);
+definitions.push(`
+alter table ${idx['TABLE_NAME']}
+    auto_increment = 1;`);
+                    }
                 }
             } else {
                 definitions.push(`
 create index ${idx['INDEX_NAME']}
-    on ${idx['TABLE_NAME']} (${idx['FIELD_NAME']});
-`)
+    on ${idx['TABLE_NAME']} (${idx['FIELD_NAME']});`)
             }
         });
 
         wrapper.definition = definitions.join('\n');
-       // if(name==="application") console.log(wrapper.definition);
     });
 
-    let noparent = [];
+    let tableOrder = [];
     for (let i = 0; i < tables.length; i++) {
         if(hasParent.indexOf(tables[i].name)<0) {
-            noparent.push(tables[i].name);
+            tableOrder.push(tables[i].name);
         }
     }
-    noparent.sort();
+    tableOrder.sort();
 
-    let byCounts = {};
-    for (let i = 0; i < hasParent.length; i++) {
-        let tableName = hasParent[i];
-        let table = schema[hasParent[i]];
-        for (let j = 0; j < table.length; j++) {
-            var column = table[j];
-            var references = column.references;
-            if(column.references.length==0) continue;
-
-            for (let k = 0; k < references.length; k++) {
-                var reference = references[k];
-                if(byCounts[reference.tableName]===undefined) byCounts[reference.tableName]={name:reference.tableName,count:0,children:[]};
-                byCounts[reference.tableName].count++;
-                byCounts[reference.tableName].children.push(tableName);
-            }
+    hasParent.forEach((child)=>{
+        let tableColumns = schema[child];
+        let pos=-1;
+        tableColumns.forEach((column)=>{
+            column.references.forEach((reference)=>{
+                let pos2 = tableOrder.indexOf(reference.tableName);
+                //console.log(child,reference.tableName,pos,pos2);
+                if(pos2<0) { if(tableOrder.indexOf(reference.tableName)<0) { tableOrder.push(reference.tableName); } }
+                else if(pos2+1>pos) pos=pos2+1;
+            });
+        });
+        if(tableOrder.indexOf(child)<0) {
+            if(pos<0) tableOrder.push(child);
+            else tableOrder.splice(pos,0,child);
         }
-    }
-    byCounts = orderBy(byCounts,['count']).reverse();
-    let tableOrder = noparent;
-    for(let i=0;i<byCounts.length;i++){
-        if(tableOrder.indexOf(byCounts[i].name)<0)
-            tableOrder.push(byCounts[i].name);
-
-        let children = byCounts[i].children;
-        for(let j=0;j<children.length;j++){
-            let child=children[j];
-            if(tableOrder.indexOf(child)<0 && byCounts.indexOf(child)<0) {
-                tableOrder.push(child);
-            }
-        }
-    }
+    });
 
     const procedures = [];
     for(let i=0;i<queryProcedures.length;i++) {
