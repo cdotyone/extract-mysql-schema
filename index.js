@@ -207,7 +207,7 @@ const extractSchemas = async function (connection, options) {
 		if(column.generated==="STORED") def = `${column.expression} STORED`;
 		let notNull = column.isNullable?"NULL":"NOT NULL";
 		if(column.generated==="STORED") {
-            def = `(${column.expression}) STORED`;
+            def = ` AS (${column.expression}) STORED`;
             notNull=""
         }
         definition.push(`${name}\t${column.sqltype}\t${column.isAutoNumber && column.isPrimaryKey ?" auto_increment":""}${def}\t${notNull}${column.isPrimaryKey && !column.isCompoundKey?" PRIMARY KEY":""}${extra}`);
