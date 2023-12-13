@@ -9,6 +9,10 @@ async function main(options) {
   if(options.writeSql){
     const done = [];
     const content = [];
+
+  	content.push(`CREATE DATABASE IF NOT EXISTS ${config.connection.database};\nUSE ${config.connection.database};`);
+
+
     const processFolder = function(seedPath) {
       if(fs.existsSync(seedPath)) {
         fs.readdirSync(seedPath).forEach(file => {

@@ -87,7 +87,7 @@ const extractSchemas = async function (connection, options) {
     JOIN INFORMATION_SCHEMA.INNODB_TABLES T1 ON T1.TABLE_ID=I.TABLE_ID
     LEFT JOIN INFORMATION_SCHEMA.TABLES T2 ON T1.NAME=CONCAT(T2.TABLE_SCHEMA,'/',T2.TABLE_NAME)
     JOIN information_schema.COLUMNS C on C.TABLE_SCHEMA=T2.TABLE_SCHEMA and C.TABLE_NAME=T2.TABLE_NAME and C.COLUMN_NAME=F.NAME
-    WHERE T2.TABLE_SCHEMA = 'litservices' and F.POS=0
+    WHERE T2.TABLE_SCHEMA = '${schemaName}' and F.POS=0
     ORDER BY T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME,F.POS
     `);
     queryIndexes=queryIndexes[0];
@@ -95,8 +95,10 @@ const extractSchemas = async function (connection, options) {
     let queryColumns = await adapter.query(`
     SELECT T.TABLE_TYPE,C.*,
     CASE WHEN EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS C2 WHERE C2.TABLE_SCHEMA=C.TABLE_SCHEMA and C2.TABLE_NAME=C.TABLE_NAME AND C2.COLUMN_KEY='PRI' AND C.COLUMN_KEY='PRI' AND C2.COLUMN_NAME<>C.COLUMN_NAME) THEN 'YES' ELSE 'NO' END AS IS_COMPOUND_KEY
-    FROM INFORMATION_SCHEMA.COLUMNS C
+    ,TP.PARTITION_METHOD,TP.PARTITION_EXPRESSION
+	FROM INFORMATION_SCHEMA.COLUMNS C
     LEFT JOIN INFORMATION_SCHEMA.TABLES T ON T.TABLE_SCHEMA=C.TABLE_SCHEMA AND T.TABLE_NAME=C.TABLE_NAME
+	LEFT JOIN INFORMATION_SCHEMA.PARTITIONS TP ON TP.TABLE_SCHEMA=C.TABLE_SCHEMA AND TP.TABLE_NAME=C.TABLE_NAME AND TP.PARTITION_NAME IS NOT NULL
     where C.TABLE_SCHEMA ='${schemaName}'
     order by C.TABLE_NAME,C.ORDINAL_POSITION
     `);
@@ -164,7 +166,7 @@ const extractSchemas = async function (connection, options) {
                         table_type: 'BASE',
                         table_catalog: schemaName,
                         table_name: tableName,
-                        table_schema: schemaName
+                        table_schema: schemaName,
                     }
                 };
                 wrappers[tableName] = wrapper;
@@ -181,14 +183,17 @@ const extractSchemas = async function (connection, options) {
             isCompoundKey: queryColumns[i]['IS_COMPOUND_KEY'] === 'YES',
             isNullable: queryColumns[i]['IS_NULLABLE'] === 'YES',
             isAutoNumber: queryColumns[i]['EXTRA'] === 'auto_increment',
-            generated: queryColumns[i]['EXTRA'].indexOf('DEFAULT_GENERATED') >= 0 ? (queryColumns[i]['EXTRA'].indexOf('on update') > 0 ? "ALWAYS" : "BY DEFAULT") : "NEVER",
-            isUpdatable: queryColumns[i]['EXTRA'].indexOf('DEFAULT_GENERATED') < 0,
+            generated: queryColumns[i]['EXTRA'].indexOf('STORED GENERATED') >=0 ? "STORED" : (
+				queryColumns[i]['EXTRA'].indexOf('DEFAULT_GENERATED') >= 0 ? (queryColumns[i]['EXTRA'].indexOf('on update') > 0 ? "ALWAYS" : "BY DEFAULT") : "NEVER"
+			),
+			expression: queryColumns[i]['GENERATION_EXPRESSION'] !== '' ? queryColumns[i]['GENERATION_EXPRESSION'].replace(/\\'/g,"'") : null,
+			isUpdatable: queryColumns[i]['EXTRA'].indexOf('DEFAULT_GENERATED') < 0 && queryColumns[i]['EXTRA'].indexOf('STORED GENERATED') < 0,
             type: queryColumns[i]['DATA_TYPE'],
             defaultValue: queryColumns[i]['COLUMN_DEFAULT'] || "",
             references:[]
         };
         let extra = queryColumns[i]['EXTRA']||"";
-        extra=extra.replace(/DEFAULT_GENERATED\w?/g,'').replace(/auto_increment\w?/g,'');
+        extra=extra.replace(/STORED GENERATED\w?/g,'').replace(/DEFAULT_GENERATED\w?/g,'').replace(/auto_increment\w?/g,'');
         let def = column.defaultValue?(column.defaultValue):"";
         if(def!=="CURRENT_TIMESTAMP" && def) {
             if(def.indexOf('(')>0) def=`(${def})`;
@@ -197,8 +202,15 @@ const extractSchemas = async function (connection, options) {
                 else def=`('${def}')`;
             }
         }
+		if(wrapper.partition===undefined && queryColumns[i]['PARTITION_METHOD']!==null) wrapper.partition=`PARTITION BY ${queryColumns[i]['PARTITION_METHOD']}(${queryColumns[i]['PARTITION_EXPRESSION']})`;
         if(def) def=`DEFAULT ${def}`;
-        definition.push(`${name}\t${column.sqltype}\t${column.isAutoNumber && column.isPrimaryKey ?" auto_increment":""}${def}\t${column.isNullable?"NULL":"NOT NULL"}${column.isPrimaryKey && !column.isCompoundKey?" PRIMARY KEY":""}${extra}`);
+		if(column.generated==="STORED") def = `${column.expression} STORED`;
+		let notNull = column.isNullable?"NULL":"NOT NULL";
+		if(column.generated==="STORED") {
+            def = `(${column.expression}) STORED`;
+            notNull=""
+        }
+        definition.push(`${name}\t${column.sqltype}\t${column.isAutoNumber && column.isPrimaryKey ?" auto_increment":""}${def}\t${notNull}${column.isPrimaryKey && !column.isCompoundKey?" PRIMARY KEY":""}${extra}`);
 
         if(foreign[tableName+"_"+name]!==undefined) {
             column.references.push(foreign[tableName+"_"+name]);
@@ -214,7 +226,8 @@ const extractSchemas = async function (connection, options) {
     Object.keys(wrappers).forEach((name)=>{
         let wrapper = wrappers[name];
         let definition = spaceTabs(wrapper.definition).join('\n  ,');
-        definition = `CREATE TABLE IF NOT EXISTS ${name}\n(\n   ${definition}\n);`;
+		let partition = wrapper.partition!==undefined?'\n'+wrapper.partition:'';
+        definition = `CREATE TABLE IF NOT EXISTS ${name}\n(\n   ${definition}\n)${partition};`;
 
         let definitions = [];
         definitions.push(definition);
