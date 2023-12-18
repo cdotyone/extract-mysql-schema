@@ -88,6 +88,7 @@ async function main(options) {
 let options = {
   configFile:"",
   outputFile:"",
+  debug:false,
   columnISV:true,
   tableISV:false,
   procedureISV:false,
@@ -102,6 +103,7 @@ let argv = process.argv;
 
 for(let i=2;i<argv.length;i++) {
   if(argv[i]==="--columnISV") options.columnISV=true;
+  else if(argv[i]==="--debug") options.debug=true;
   else if(argv[i]==="--tableISV") options.tableISV=true;
   else if(argv[i]==="--procedureISV") options.procedureISV=true;
   else if(argv[i]==="--writeSql") options.writeSql=true;
@@ -125,8 +127,8 @@ try {
     main(options).then(()=>{
       if(options.debug) console.log("DONE");
       process.exit(0);
-    },()=>{
-      if(options.debug) console.log("ERROR");
+    },(e)=>{
+      console.log("ERROR",e);
       process.exit(1);
     })
 } catch (e) {
