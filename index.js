@@ -333,7 +333,7 @@ CREATE PROCEDURE ${name}(
 )
 ${definition}
 //
-DELIMITER;
+DELIMITER ;
 `;
 
         let routine = {
