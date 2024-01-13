@@ -26,6 +26,7 @@ async function main(options) {
       }
     };
 
+    tableContent.push(`USE ${config.connection.database};`);
     const tablesPath=path.join(process.cwd(),"tables");
     if(result[config.connection.database].tables.length>0) {
       // write table sql
@@ -48,6 +49,7 @@ async function main(options) {
     processFolder(tablesPath,tableContent); // add files not in the database
 
     const proceduresPath=path.join(process.cwd(),"procedures");
+    proceduresPath.push(`USE ${config.connection.database};`);
     if(result[config.connection.database].procedures.length>0) {
       // write routines
       if (!fs.existsSync(proceduresPath)){
@@ -64,6 +66,7 @@ async function main(options) {
     processFolder(proceduresPath,sprocContent); // add files not in the database
 
     const seedPath = path.join(process.cwd(),"seed");
+    proceduresPath.push(`USE ${config.connection.database};`);
     if(fs.existsSync(seedPath)) {
       result[config.connection.database].tableOrder.forEach(table => {
         let seedfile = path.join(seedPath,table+'.sql');
@@ -76,21 +79,22 @@ async function main(options) {
     processFolder(seedPath,seedContent); // add files not in the database
 
     const patchContent=[];
+    patchContent.push(`USE ${config.connection.database};`);
     processFolder(path.join(process.cwd(),"patch"), patchContent);
 
     if(content.length>0) {
       fs.writeFileSync(path.join(process.cwd(),"0.init.sql"), content.join('\n\n') ,"utf8");
     }
-    if(tableContent.length>0) {
+    if(tableContent.length>1) {
       fs.writeFileSync(path.join(process.cwd(),"1.table.sql"), tableContent.join('\n\n') ,"utf8");
     }
-    if(seedContent.length>0) {
+    if(seedContent.length>1) {
       fs.writeFileSync(path.join(process.cwd(),"2.seed.sql"), seedContent.join('\n\n') ,"utf8");
     }
-    if(sprocContent.length>0) {
+    if(sprocContent.length>1) {
       fs.writeFileSync(path.join(process.cwd(),"3.procedures.sql"), sprocContent.join('\n\n') ,"utf8");
     }
-    if(patchContent.length>0) {
+    if(patchContent.length>1) {
       fs.writeFileSync(path.join(process.cwd(),"4.patch.sql"), patchContent.join('\n\n') ,"utf8");
     }
 
