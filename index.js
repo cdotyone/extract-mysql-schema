@@ -53,7 +53,7 @@ const extractSchemas = async function (connection, options) {
     queryProcedures=queryProcedures[0];
 
     let queryParameters = await adapter.query(`
-    SELECT p.* FROM INFORMATION_SCHEMA.PARAMETERS as p join INFORMATION_SCHEMA.ROUTINES as r on p.SPECIFIC_NAME=r.SPECIFIC_NAME
+    SELECT p.* FROM INFORMATION_SCHEMA.PARAMETERS as p join INFORMATION_SCHEMA.ROUTINES as r on p.SPECIFIC_NAME=r.SPECIFIC_NAME and p.SPECIFIC_SCHEMA=r.ROUTINE_SCHEMA
     WHERE ROUTINE_SCHEMA='${schemaName}'
     ORDER BY p.SPECIFIC_NAME,p.ORDINAL_POSITION
     `);
