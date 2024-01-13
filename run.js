@@ -9,16 +9,18 @@ async function main(options) {
   if(options.writeSql){
     const done = [];
     const content = [];
+    const seedContent = [];
+    const sprocContent = [];
+    const tableContent = [];
 
   	content.push(`CREATE DATABASE IF NOT EXISTS ${config.connection.database};\nUSE ${config.connection.database};`);
 
-
-    const processFolder = function(seedPath) {
+    const processFolder = function(seedPath,fileList,contentArray) {
       if(fs.existsSync(seedPath)) {
         fs.readdirSync(seedPath).forEach(file => {
           file = path.join(seedPath,file);
           if(done.indexOf(file)<0){
-            content.push(fs.readFileSync(file,"utf8"));
+            contentArray.push(fs.readFileSync(file,"utf8"));
           }
         });
       }
@@ -40,10 +42,10 @@ async function main(options) {
       });
 
       result[config.connection.database].tableOrder.forEach(table => {
-        content.push(byName[table]);
+        tableContent.push(byName[table]);
       })
-    }
-    processFolder(tablesPath);
+    } 
+    processFolder(tablesPath,tableContent); // add files not in the database
 
     const proceduresPath=path.join(process.cwd(),"procedures");
     if(result[config.connection.database].procedures.length>0) {
@@ -55,11 +57,11 @@ async function main(options) {
         let file = path.join(proceduresPath,proc.name+".sql");
         done.push(file);
         if(options.verbose) console.log("writing",file);
-        content.push(proc.definition);
-        fs.writeFileSync(file, proc.definition ,"utf8")
+        fs.writeFileSync(file, proc.definition ,"utf8");
+        sprocContent.push(proc.definition);
       });
     }
-    processFolder(proceduresPath);
+    processFolder(proceduresPath,sprocContent); // add files not in the database
 
     const seedPath = path.join(process.cwd(),"seed");
     if(fs.existsSync(seedPath)) {
@@ -67,14 +69,35 @@ async function main(options) {
         let seedfile = path.join(seedPath,table+'.sql');
         if (fs.existsSync(seedfile)){
           done.push(seedfile);
-          content.push(fs.readFileSync(seedfile,"utf8"));
+          seedContent.push(fs.readFileSync(seedfile,"utf8"));
         }
       });
     }
-    processFolder(seedPath);
+    processFolder(seedPath,seedContent); // add files not in the database
 
-    processFolder(path.join(process.cwd(),"override"));
+    const patchContent=[];
+    processFolder(path.join(process.cwd(),"patch"), patchContent);
 
+    if(content.length>0) {
+      fs.writeFileSync(path.join(process.cwd(),"0.init.sql"), content.join('\n\n') ,"utf8");
+    }
+    if(tableContent.length>0) {
+      fs.writeFileSync(path.join(process.cwd(),"1.table.sql"), tableContent.join('\n\n') ,"utf8");
+    }
+    if(seedContent.length>0) {
+      fs.writeFileSync(path.join(process.cwd(),"2.seed.sql"), seedContent.join('\n\n') ,"utf8");
+    }
+    if(sprocContent.length>0) {
+      fs.writeFileSync(path.join(process.cwd(),"3.procedures.sql"), sprocContent.join('\n\n') ,"utf8");
+    }
+    if(patchContent.length>0) {
+      fs.writeFileSync(path.join(process.cwd(),"4.patch.sql"), patchContent.join('\n\n') ,"utf8");
+    }
+
+    content=content.concat(tableContent);
+    content=content.concat(seedContent);
+    content=content.concat(sprocContent);
+    content=content.concat(patchContent);
     if(content.length>0) {
       fs.writeFileSync(path.join(process.cwd(),"init.sql"), content.join('\n\n') ,"utf8");
     }
