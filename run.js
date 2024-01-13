@@ -8,14 +8,14 @@ async function main(options) {
 
   if(options.writeSql){
     const done = [];
-    const content = [];
+    let content = [];
     const seedContent = [];
     const sprocContent = [];
     const tableContent = [];
 
   	content.push(`CREATE DATABASE IF NOT EXISTS ${config.connection.database};\nUSE ${config.connection.database};`);
 
-    const processFolder = function(seedPath,fileList,contentArray) {
+    const processFolder = function(seedPath,contentArray) {
       if(fs.existsSync(seedPath)) {
         fs.readdirSync(seedPath).forEach(file => {
           file = path.join(seedPath,file);
@@ -44,7 +44,7 @@ async function main(options) {
       result[config.connection.database].tableOrder.forEach(table => {
         tableContent.push(byName[table]);
       })
-    } 
+    }
     processFolder(tablesPath,tableContent); // add files not in the database
 
     const proceduresPath=path.join(process.cwd(),"procedures");

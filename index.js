@@ -80,7 +80,7 @@ const extractSchemas = async function (connection, options) {
     FROM INFORMATION_SCHEMA.INNODB_INDEXES I
     JOIN INFORMATION_SCHEMA.INNODB_FIELDS F on F.INDEX_ID=I.INDEX_ID
     JOIN (
-        SELECT group_concat(FF.NAME) as INDEX_KEYS,FF.INDEX_ID
+        SELECT group_concat(FF.NAME ORDER BY FF.POS) as INDEX_KEYS,FF.INDEX_ID
         FROM INFORMATION_SCHEMA.INNODB_FIELDS as FF
         GROUP BY FF.INDEX_ID
     ) as F2 ON F2.INDEX_ID=F.INDEX_ID
@@ -323,15 +323,14 @@ create index ${idx['INDEX_NAME']}
             params.push(param);
         }
 
-        paramsDefinition = paramsDefinition.join('\n\t,');
+        paramsDefinition = paramsDefinition.join('\n\t,').trim();
+		if(paramsDefinition) paramsDefinition=`\n\t ${paramsDefinition}\n`;
 
-        definition = `
+		definition = `
 DELIMITER //
 DROP PROCEDURE IF EXISTS ${name};
-CREATE PROCEDURE ${name}(
-\t ${paramsDefinition}
-)
-${definition}
+CREATE PROCEDURE ${name}(${paramsDefinition})
+${definition};
 //
 DELIMITER ;
 `;
