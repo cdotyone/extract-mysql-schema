@@ -26,8 +26,8 @@ async function main(options) {
       }
     };
 
-    tableContent.push(`USE ${config.connection.database};`);
     const tablesPath=path.join(process.cwd(),"tables");
+    tableContent.push(`USE ${config.connection.database};`);
     if(result[config.connection.database].tables.length>0) {
       // write table sql
       if (!fs.existsSync(tablesPath)){
@@ -49,7 +49,7 @@ async function main(options) {
     processFolder(tablesPath,tableContent); // add files not in the database
 
     const proceduresPath=path.join(process.cwd(),"procedures");
-    proceduresPath.push(`USE ${config.connection.database};`);
+    sprocContent.push(`USE ${config.connection.database};`);
     if(result[config.connection.database].procedures.length>0) {
       // write routines
       if (!fs.existsSync(proceduresPath)){
@@ -66,7 +66,7 @@ async function main(options) {
     processFolder(proceduresPath,sprocContent); // add files not in the database
 
     const seedPath = path.join(process.cwd(),"seed");
-    proceduresPath.push(`USE ${config.connection.database};`);
+    seedContent.push(`USE ${config.connection.database};`);
     if(fs.existsSync(seedPath)) {
       result[config.connection.database].tableOrder.forEach(table => {
         let seedfile = path.join(seedPath,table+'.sql');
