@@ -74,7 +74,7 @@ const extractSchemas = async function (connection, options) {
         F.POS,I.TYPE,I.*,
         CASE WHEN I.TYPE=2 OR I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_UNIQUE,
         CASE WHEN I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_PRIMARY,
-        CASE WHEN I.TYPE=0 THEN 'YES' ELSE 'NO' END AS IS_FK,
+        CASE WHEN I.TYPE=0 THEN (CASE WHEN iif.id is not null THEN 'YES' ELSE 'NO' END) ELSE 'NO' END AS IS_FK,
         CASE WHEN C.EXTRA='auto_increment' THEN 'YES' ELSE 'NO' END AS IS_AUTONUMBER,
         F2.INDEX_KEYS as FIELD_NAME
     FROM INFORMATION_SCHEMA.INNODB_INDEXES I
@@ -85,6 +85,7 @@ const extractSchemas = async function (connection, options) {
         GROUP BY FF.INDEX_ID
     ) as F2 ON F2.INDEX_ID=F.INDEX_ID
     JOIN INFORMATION_SCHEMA.INNODB_TABLES T1 ON T1.TABLE_ID=I.TABLE_ID
+	LEFT JOIN INFORMATION_SCHEMA.INNODB_FOREIGN as iif on iif.id= concat('${schemaName}','/',I.NAME)
     LEFT JOIN INFORMATION_SCHEMA.TABLES T2 ON T1.NAME=CONCAT(T2.TABLE_SCHEMA,'/',T2.TABLE_NAME)
     JOIN information_schema.COLUMNS C on C.TABLE_SCHEMA=T2.TABLE_SCHEMA and C.TABLE_NAME=T2.TABLE_NAME and C.COLUMN_NAME=F.NAME
     WHERE T2.TABLE_SCHEMA = '${schemaName}' and F.POS=0
@@ -237,14 +238,15 @@ const extractSchemas = async function (connection, options) {
             let isConstraint = idx['IS_UNIQUE']==='YES' || idx['IS_PRIMARY']==='YES' || idx['IS_FK']==='YES';
 
             if(isConstraint) {
-                if(idx['IS_PRIMARY']==='YES') {
+			//console.log('HERE',idx)
+			if(idx['IS_PRIMARY']==='YES') {
                     if(idx['FIELD_NAME'].indexOf(',')>0) {
                         definitions.push(`
 alter table ${idx['TABLE_NAME']}
     add primary key (${idx['FIELD_NAME']});
 `)
                     }
-                } else if(idx['IS_UNIQUE']==='YES') {
+            } else if(idx['IS_UNIQUE']==='YES' && idx['IS_FK']==='NO') {
                     definitions.push(`
 alter table ${idx['TABLE_NAME']}
     add constraint ${idx['INDEX_NAME']}
@@ -258,13 +260,28 @@ definitions.push(`
 alter table ${idx['TABLE_NAME']}
     auto_increment = 1;`);
                     }
-                }
-            } else {
-                definitions.push(`
+            } else if(idx['IS_FK']==='YES') {
+				let refTable;
+				let refCols;
+				for (let i = 0; i < queryFkey.length; i++) {
+					if(queryFkey[i].ID===schemaName+'/'+idx['INDEX_NAME']) {
+						refTable=queryFkey[i].REF_NAME.replace(/.*\//g,'');
+						refCols=queryFkey[i].REF_COL_NAME;
+					}
+				}
+
+				definitions.push(`
+alter table ${idx['TABLE_NAME']}
+	add constraint ${idx['INDEX_NAME']}
+	foreign key (${idx['FIELD_NAME']}) references ${refTable} (${refCols});
+`);
+			}
+        } else {
+			definitions.push(`
 create index ${idx['INDEX_NAME']}
-    on ${idx['TABLE_NAME']} (${idx['FIELD_NAME']});`)
-            }
-        });
+	on ${idx['TABLE_NAME']} (${idx['FIELD_NAME']});`)
+		}
+	});
 
         wrapper.definition = definitions.join('\n');
     });
