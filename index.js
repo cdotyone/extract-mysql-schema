@@ -293,21 +293,23 @@ create index ${idx['INDEX_NAME']}
         }
     }
     tableOrder.sort();
+	let minpos = tableOrder.length;
 
     hasParent.forEach((child)=>{
         let tableColumns = schema[child];
-        let pos=-1;
+        let pos=minpos;
         tableColumns.forEach((column)=>{
             column.references.forEach((reference)=>{
                 let pos2 = tableOrder.indexOf(reference.tableName);
-                //console.log(child,reference.tableName,pos,pos2);
-                if(pos2<0) { if(tableOrder.indexOf(reference.tableName)<0) { tableOrder.push(reference.tableName); } }
+                if(pos2<0) { tableOrder.push(reference.tableName); pos=tableOrder.length }
                 else if(pos2+1>pos) pos=pos2+1;
             });
         });
         if(tableOrder.indexOf(child)<0) {
             if(pos<0) tableOrder.push(child);
-            else tableOrder.splice(pos,0,child);
+            else {
+				tableOrder.splice(pos,0,child);
+			}
         }
     });
 
