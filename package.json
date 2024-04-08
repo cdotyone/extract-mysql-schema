@@ -1,6 +1,6 @@
 {
   "name": "extract-mysql-schema",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "",
   "main": "index.js",
   "bin": "./run.js",
@@ -18,10 +18,6 @@
   "author": "Chris Doty",
   "license": "MIT",
   "dependencies": {
-    "mysql2": "^3.6.3",
-    "sequelize": "^6.34.0"
-  },
-  "devDependencies": {
-    "lodash.orderby": "^4.6.0"
+    "mysql2": "^3.9.3"
   }
 }

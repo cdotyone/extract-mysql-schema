@@ -1,6 +1,5 @@
 "use strict";
-const SequelizeAdapter = require("sequelize");
-const orderBy = require("lodash.orderby");
+const mysql = require('mysql2/promise');
 
 const spaceTabs = function(list) {
     const cols=[];
@@ -26,48 +25,29 @@ const spaceTabs = function(list) {
     return lines;
 }
 
-
-const getAdapter = async function (connection) {
-    let adapter = new SequelizeAdapter(connection.database, connection.user, connection.password, {
-        host: connection.Host,
-        dialect: "mysql",
-        logging: false,
-        pool: {
-            max: 5,
-            min: 0,
-            idle: 10000
-        }
-    });
-    return adapter;
-}
-
 const extractSchemas = async function (connection, options) {
     const schemaName = connection.database;
     options = options || {};
 
-    let adapter = await getAdapter(connection);
-
-    let queryProcedures = await adapter.query(`
+    let c = await mysql.createConnection(connection);
+    let [queryProcedures] = await c.query(`
     SELECT * FROM INFORMATION_SCHEMA.ROUTINES where ROUTINE_SCHEMA = '${schemaName}'
     `);
-    queryProcedures=queryProcedures[0];
 
-    let queryParameters = await adapter.query(`
+    let [queryParameters] = await c.query(`
     SELECT p.* FROM INFORMATION_SCHEMA.PARAMETERS as p join INFORMATION_SCHEMA.ROUTINES as r on p.SPECIFIC_NAME=r.SPECIFIC_NAME and p.SPECIFIC_SCHEMA=r.ROUTINE_SCHEMA
     WHERE ROUTINE_SCHEMA='${schemaName}'
     ORDER BY p.SPECIFIC_NAME,p.ORDINAL_POSITION
     `);
-    queryParameters=queryParameters[0];
 
-    let queryFkey = await adapter.query(`
+    let [queryFkey] = await c.query(`
     SELECT iif.*, iifc.FOR_COL_NAME, iifc.REF_COL_NAME
     FROM INFORMATION_SCHEMA.INNODB_FOREIGN as iif
     JOIN INFORMATION_SCHEMA.INNODB_FOREIGN_COLS as iifc on iifc.ID=iif.ID
     WHERE iif.ID LIKE '${schemaName}/%'
     `);
-    queryFkey=queryFkey[0];
 
-    let queryIndexes = await adapter.query(`
+    let [queryIndexes] = await c.query(`
     select
         T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME as INDEX_NAME,
         C.COLUMN_TYPE as FIELD_TYPE,
@@ -91,9 +71,8 @@ const extractSchemas = async function (connection, options) {
     WHERE T2.TABLE_SCHEMA = '${schemaName}' and F.POS=0
     ORDER BY T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME,F.POS
     `);
-    queryIndexes=queryIndexes[0];
 
-    let queryColumns = await adapter.query(`
+    let [queryColumns] = await c.query(`
     SELECT T.TABLE_TYPE,C.*,
     CASE WHEN EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS C2 WHERE C2.TABLE_SCHEMA=C.TABLE_SCHEMA and C2.TABLE_NAME=C.TABLE_NAME AND C2.COLUMN_KEY='PRI' AND C.COLUMN_KEY='PRI' AND C2.COLUMN_NAME<>C.COLUMN_NAME) THEN 'YES' ELSE 'NO' END AS IS_COMPOUND_KEY
     ,TP.PARTITION_METHOD,TP.PARTITION_EXPRESSION
@@ -103,9 +82,8 @@ const extractSchemas = async function (connection, options) {
     where C.TABLE_SCHEMA ='${schemaName}'
     order by C.TABLE_NAME,C.ORDINAL_POSITION
     `);
-    queryColumns = queryColumns[0];
 
-    await adapter.close();
+    c.end();
 
     const foreign = {};
     for(let i=0;i<queryFkey.length;i++) {
