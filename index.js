@@ -324,8 +324,9 @@ create index ${idx['INDEX_NAME']}
 		if(paramsDefinition) paramsDefinition=`\n\t ${paramsDefinition}\n`;
 
 		definition = `
-DELIMITER //
+
 DROP PROCEDURE IF EXISTS ${name};
+DELIMITER //
 CREATE PROCEDURE ${name}(${paramsDefinition})
 ${definition};
 //
