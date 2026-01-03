@@ -4,6 +4,24 @@ const { extractSchemas } = require('./index.js');
 
 async function main(options) {
   const config = require(path.join(process.cwd(),options.configFile));
+
+  if(config.connection.location){
+    if(!config.connection.database){
+      throw new Error("If connection.location is specified, connection.database must also be specified");
+    }
+
+    let location = path.isAbsolute(config.connection.location) ? config.connection.location : path.join(process.cwd(),config.connection.location);
+    location = path.join(location,".schemalintrc");
+    console.log("Loading connections from",location);
+    let connections = JSON.parse(fs.readFileSync(location,"utf8"));
+
+    if(!connections[config.connection.database]){
+      throw new Error("No connection found for database "+config.connection.database+" in "+location);
+    }
+
+    config.connection = connections[config.connection.database];
+  }
+
   const result = await extractSchemas(config.connection,options);
 
   if(options.writeSql){
