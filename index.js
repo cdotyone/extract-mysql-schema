@@ -29,59 +29,130 @@ const extractSchemas = async function (connection, options) {
     const schemaName = connection.database;
     options = options || {};
 
+
     let c = await mysql.createConnection(connection);
-    let [queryProcedures] = await c.query(`
-    SELECT * FROM INFORMATION_SCHEMA.ROUTINES where ROUTINE_SCHEMA = '${schemaName}'
-    `);
 
-    let [queryParameters] = await c.query(`
-    SELECT p.* FROM INFORMATION_SCHEMA.PARAMETERS as p join INFORMATION_SCHEMA.ROUTINES as r on p.SPECIFIC_NAME=r.SPECIFIC_NAME and p.SPECIFIC_SCHEMA=r.ROUTINE_SCHEMA
-    WHERE ROUTINE_SCHEMA='${schemaName}'
-    ORDER BY p.SPECIFIC_NAME,p.ORDINAL_POSITION
-    `);
+    let queryProcedures = [];
+    let queryParameters = [];
+    let queryColumns = [];
+    let queryFkey = [];
+    let queryIndexes = [];
+    let [tablenames] = await c.query('SHOW TABLES');
+    let [proceduresResult] = await c.query(`SHOW PROCEDURE STATUS`);
 
-    let [queryFkey] = await c.query(`
-    SELECT iif.*, iifc.FOR_COL_NAME, iifc.REF_COL_NAME
-    FROM INFORMATION_SCHEMA.INNODB_FOREIGN as iif
-    JOIN INFORMATION_SCHEMA.INNODB_FOREIGN_COLS as iifc on iifc.ID=iif.ID
-    WHERE iif.ID LIKE '${schemaName}/%'
-    `);
+    const tableKey = Object.keys(tablenames[0])[0];
 
-    let [queryIndexes] = await c.query(`
-    select
-        T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME as INDEX_NAME,
-        C.COLUMN_TYPE as FIELD_TYPE,
-        F.POS,I.TYPE,I.*,
-        CASE WHEN I.TYPE=2 OR I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_UNIQUE,
-        CASE WHEN I.TYPE=3 THEN 'YES' ELSE 'NO' END AS IS_PRIMARY,
-        CASE WHEN I.TYPE=0 THEN (CASE WHEN iif.id is not null THEN 'YES' ELSE 'NO' END) ELSE 'NO' END AS IS_FK,
-        CASE WHEN C.EXTRA='auto_increment' THEN 'YES' ELSE 'NO' END AS IS_AUTONUMBER,
-        F2.INDEX_KEYS as FIELD_NAME
-    FROM INFORMATION_SCHEMA.INNODB_INDEXES I
-    JOIN INFORMATION_SCHEMA.INNODB_FIELDS F on F.INDEX_ID=I.INDEX_ID
-    JOIN (
-        SELECT group_concat(FF.NAME ORDER BY FF.POS) as INDEX_KEYS,FF.INDEX_ID
-        FROM INFORMATION_SCHEMA.INNODB_FIELDS as FF
-        GROUP BY FF.INDEX_ID
-    ) as F2 ON F2.INDEX_ID=F.INDEX_ID
-    JOIN INFORMATION_SCHEMA.INNODB_TABLES T1 ON T1.TABLE_ID=I.TABLE_ID
-	LEFT JOIN INFORMATION_SCHEMA.INNODB_FOREIGN as iif on iif.id= concat('${schemaName}','/',I.NAME)
-    LEFT JOIN INFORMATION_SCHEMA.TABLES T2 ON T1.NAME=CONCAT(T2.TABLE_SCHEMA,'/',T2.TABLE_NAME)
-    JOIN information_schema.COLUMNS C on C.TABLE_SCHEMA=T2.TABLE_SCHEMA and C.TABLE_NAME=T2.TABLE_NAME and C.COLUMN_NAME=F.NAME
-    WHERE T2.TABLE_SCHEMA = '${schemaName}' and F.POS=0
-    ORDER BY T2.TABLE_SCHEMA,T2.TABLE_NAME,I.NAME,F.POS
-    `);
+    for (const row of tablenames) {
+        const tableName = row[tableKey];
+        const [columnsResult] = await c.query( `SHOW COLUMNS FROM \`${tableName}\`` );
+        const [indexResult] = await c.query( `SHOW INDEX FROM \`${tableName}\`` );
+        const [keysResult] = await c.query( `SHOW KEYS FROM \`${tableName}\`` );
 
-    let [queryColumns] = await c.query(`
-    SELECT T.TABLE_TYPE,C.*,
-    CASE WHEN EXISTS(SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS C2 WHERE C2.TABLE_SCHEMA=C.TABLE_SCHEMA and C2.TABLE_NAME=C.TABLE_NAME AND C2.COLUMN_KEY='PRI' AND C.COLUMN_KEY='PRI' AND C2.COLUMN_NAME<>C.COLUMN_NAME) THEN 'YES' ELSE 'NO' END AS IS_COMPOUND_KEY
-    ,TP.PARTITION_METHOD,TP.PARTITION_EXPRESSION
-	FROM INFORMATION_SCHEMA.COLUMNS C
-    LEFT JOIN INFORMATION_SCHEMA.TABLES T ON T.TABLE_SCHEMA=C.TABLE_SCHEMA AND T.TABLE_NAME=C.TABLE_NAME
-	LEFT JOIN INFORMATION_SCHEMA.PARTITIONS TP ON TP.TABLE_SCHEMA=C.TABLE_SCHEMA AND TP.TABLE_NAME=C.TABLE_NAME AND TP.PARTITION_NAME IS NOT NULL
-    where C.TABLE_SCHEMA ='${schemaName}'
-    order by C.TABLE_NAME,C.ORDINAL_POSITION
-    `);
+
+        for(let col in columnsResult) {
+            let column = {
+                "TABLE_TYPE": "BASE TABLE",
+                "TABLE_CATALOG": "def",
+                "TABLE_SCHEMA": schemaName,
+                "TABLE_NAME": tableName,
+                "COLUMN_NAME": columnsResult[col]['Field'],
+                "ORDINAL_POSITION": col,
+                "COLUMN_KEY": columnsResult[col]['Key'],
+                "EXTRA": columnsResult[col]['Extra'],
+                "IS_NULLABLE": columnsResult[col]['Null']==='YES' ? 'YES' : 'NO',
+                "COLUMN_DEFAULT": columnsResult[col]['Default'],
+                "COLUMN_TYPE": columnsResult[col]['Type'],
+                "DATA_TYPE": columnsResult[col]['Type'].split('(')[0],
+                "GENERATION_EXPRESSION": columnsResult[col]['Extra'].indexOf('GENERATED')>=0 ? columnsResult[col]['Default'] || '' : '',
+                "CHARACTER_MAXIMUM_LENGTH": columnsResult[col]['Type'].split('(')[1] ? parseInt(columnsResult[col]['Type'].split('(')[1]) : 0,
+            };
+
+            for(let idx in indexResult) {
+                if(indexResult[idx]['Column_name']===column['COLUMN_NAME']) {
+                    column['IS_COMPOUND_KEY'] = indexResult[idx]['Key_name'] !== 'PRIMARY' && indexResult[idx]['Seq_in_index'] > 1 ? 'YES' : 'NO';
+                    column["IS_PRIMARY_KEY"] = indexResult[idx]['Key_name'] === 'PRIMARY' ? 'YES' : 'NO';
+                }
+            }
+            queryColumns.push(column)
+        }
+
+        for(let key in keysResult) {
+            if(keysResult[key]['Key_name']!=='PRIMARY' && keysResult[key]['Referenced_table_name']) {
+                let fkey = {
+                    "ID": schemaName + '/' + keysResult[key]['Key_name'],
+                    "FOR_NAME": schemaName + '/' + tableName,
+                    "FOR_COL_NAME": keysResult[key]['Column_name'],
+                    "REF_NAME": schemaName + '/' + keysResult[key]['Referenced_table_name'],
+                    "REF_COL_NAME": keysResult[key]['Referenced_column_name']
+                };
+                queryFkey.push(fkey);
+            }
+        }
+
+        queryIndexes=[]
+        for(let idx in indexResult) {
+            let isUnique = indexResult[idx]['Non_unique'] === 0 ? 'YES' : 'NO';
+            let isPrimary = indexResult[idx]['Key_name'] === 'PRIMARY' ? 'YES' : 'NO';
+            let isFK = 'NO';
+            for(let key in keysResult) {
+                if(keysResult[key]['Key_name']===indexResult[idx]['Key_name'] && keysResult[key]['Referenced_table_name']) {
+                    isFK = 'YES';
+                }
+            }
+            queryIndexes.push({
+                "TABLE_SCHEMA": schemaName,
+                "TABLE_NAME": tableName,
+                "INDEX_NAME": indexResult[idx]['Key_name'],
+                "FIELD_TYPE": indexResult[idx]['Index_type'],
+                "POS": indexResult[idx]['Seq_in_index'] - 1,
+                "TYPE": indexResult[idx]['Index_type'],
+                "IS_UNIQUE": isUnique,
+                "IS_PRIMARY": isPrimary,
+                "IS_FK": isFK,
+                "IS_AUTONUMBER": 'NO',
+                "FIELD_NAME": indexResult[idx]['Column_name']
+            });
+        }
+    }
+
+    for(let proc of proceduresResult) {
+        if(proc['Db']!==schemaName) continue;
+        const [procDefResult] = await c.query( `SHOW CREATE PROCEDURE \`${proc['Name']}\`` );
+        let procedure = {
+            "SPECIFIC_NAME": proc['Name'],
+            "ROUTINE_DEFINITION": procDefResult[0]['Create Procedure']
+        };
+        queryProcedures.push(procedure);
+
+        const match = procDefResult[0]['Create Procedure'].match(/\(([\s\S]*?)\)/);
+        if (!match) { console.log('No parameters found'); return []; }
+        const paramString = match[1].trim();
+        const params = paramString .split(',') .map(p => p.trim()) .filter(p => p.length > 0);
+
+        for (let i = 0; i < params.length; i++) {
+            const paramParts = params[i].split(/\s+/);
+            let paramMode = 'IN';
+            let paramName, paramType;
+            if (paramParts.length === 2) {
+                paramName = paramParts[0];
+                paramType = paramParts[1];
+            } else if (paramParts.length === 3) {
+                paramMode = paramParts[0];
+                paramName = paramParts[1];
+                paramType = paramParts[2];
+            }
+            let parameter = {
+                "SPECIFIC_NAME": proc['Name'],
+                "PARAMETER_NAME": paramName,
+                "ORDINAL_POSITION": i + 1,
+                "PARAMETER_MODE": paramMode,
+                "DATA_TYPE": paramType.split('(')[0],
+                "DTD_IDENTIFIER": paramType,
+                "CHARACTER_MAXIMUM_LENGTH": paramType.split('(')[1] ? parseInt(paramType.split('(')[1]) : 0,
+            };
+            queryParameters.push(parameter);
+        }
+    }
 
     c.end();
 
@@ -181,7 +252,7 @@ const extractSchemas = async function (connection, options) {
                 else def=`('${def}')`;
             }
         }
-		if(wrapper.partition===undefined && queryColumns[i]['PARTITION_METHOD']!==null) wrapper.partition=`PARTITION BY ${queryColumns[i]['PARTITION_METHOD']}(${queryColumns[i]['PARTITION_EXPRESSION']})`;
+		if(wrapper.partition!==undefined && queryColumns[i]['PARTITION_METHOD']!==null) wrapper.partition=`PARTITION BY ${queryColumns[i]['PARTITION_METHOD']}(${queryColumns[i]['PARTITION_EXPRESSION']})`;
         if(def) def=`DEFAULT ${def}`;
 		if(column.generated==="STORED") def = `${column.expression} STORED`;
 		let notNull = column.isNullable?"NULL":"NOT NULL";
