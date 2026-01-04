@@ -3,7 +3,7 @@
   "version": "1.0.1",
   "description": "",
   "main": "index.js",
-  "bin": "./run.js",
+  "bin": "./bin.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/cdotyone/extract-mysql-schema.git"
@@ -12,7 +12,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "test": "node ./run.js"
+    "test": "node ./bin.js"
   },
   "keywords": [],
   "author": "Chris Doty",

@@ -1,27 +1,11 @@
+#!/usr/bin/env node
+
 const fs = require("fs");
 const path = require("path");
 const { extractSchemas } = require('./index.js');
 
 async function main(options) {
   const config = require(path.join(process.cwd(),options.configFile));
-
-  if(config.connection.location){
-    if(!config.connection.database){
-      throw new Error("If connection.location is specified, connection.database must also be specified");
-    }
-
-    let location = path.isAbsolute(config.connection.location) ? config.connection.location : path.join(process.cwd(),config.connection.location);
-    location = path.join(location,".schemalintrc");
-    console.log("Loading connections from",location);
-    let connections = JSON.parse(fs.readFileSync(location,"utf8"));
-
-    if(!connections[config.connection.database]){
-      throw new Error("No connection found for database "+config.connection.database+" in "+location);
-    }
-
-    config.connection = connections[config.connection.database];
-  }
-
   const result = await extractSchemas(config.connection,options);
 
   if(options.writeSql){
@@ -135,7 +119,6 @@ let options = {
   outputFile:"",
   debug:false,
   columnISV:true,
-  tableISV:false,
   procedureISV:false,
   writeSql:false
 }
@@ -149,7 +132,6 @@ let argv = process.argv;
 for(let i=2;i<argv.length;i++) {
   if(argv[i]==="--columnISV") options.columnISV=true;
   else if(argv[i]==="--debug") options.debug=true;
-  else if(argv[i]==="--tableISV") options.tableISV=true;
   else if(argv[i]==="--procedureISV") options.procedureISV=true;
   else if(argv[i]==="--writeSql") options.writeSql=true;
   else
